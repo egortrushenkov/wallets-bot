@@ -1,0 +1,17 @@
+{
+  "name": "trx-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot for tracking TRON wallet balances",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node -r dotenv/config bot.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.13.6",
+    "dotenv": "^16.6.1",
+    "node-telegram-bot-api": "^0.67.0"
+  }
+}
