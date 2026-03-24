@@ -56,6 +56,11 @@ function getState(chatId)    { return state[chatId] || null; }
 function clearState(chatId)  { delete state[chatId]; }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  Утилиты
+// ─────────────────────────────────────────────────────────────────────────────
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  API: курс TRX
 // ─────────────────────────────────────────────────────────────────────────────
 async function getTrxPrice() {
@@ -69,31 +74,47 @@ async function getTrxPrice() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  API: данные кошелька
+//  API: данные кошелька (с retry при 429)
 // ─────────────────────────────────────────────────────────────────────────────
-async function getWalletData(address) {
-  const r = await axios.get(TRONGRID + '/v1/accounts/' + address, { timeout: 10000 });
-  const data = r.data?.data;
+async function getWalletData(address, attempt) {
+  attempt = attempt || 1;
+  const MAX_ATTEMPTS = 4;
+  const RETRY_DELAY  = [0, 2000, 5000, 10000]; // задержка перед каждой попыткой
 
-  if (!data || data.length === 0) {
-    return { trx: 0, usdt: 0, tokens: 0 };
-  }
+  try {
+    const r = await axios.get(TRONGRID + '/v1/accounts/' + address, { timeout: 12000 });
+    const data = r.data?.data;
 
-  const acc = data[0];
-  const trx = (acc.balance || 0) / 1e6;
-  let usdt   = 0;
-  let tokens = 0;
-
-  for (const obj of (acc.trc20 || [])) {
-    const [contract, raw] = Object.entries(obj)[0];
-    if (contract === USDT_CONTRACT) {
-      usdt = parseInt(raw) / 1e6;
-    } else {
-      tokens++;
+    if (!data || data.length === 0) {
+      return { trx: 0, usdt: 0, tokens: 0 };
     }
-  }
 
-  return { trx, usdt, tokens };
+    const acc = data[0];
+    const trx = (acc.balance || 0) / 1e6;
+    let usdt   = 0;
+    let tokens = 0;
+
+    for (const obj of (acc.trc20 || [])) {
+      const [contract, raw] = Object.entries(obj)[0];
+      if (contract === USDT_CONTRACT) {
+        usdt = parseInt(raw) / 1e6;
+      } else {
+        tokens++;
+      }
+    }
+
+    return { trx, usdt, tokens };
+
+  } catch (e) {
+    const status = e.response?.status;
+    if (status === 429 && attempt < MAX_ATTEMPTS) {
+      const delay = RETRY_DELAY[attempt] || 10000;
+      console.log('[429] ' + address + ' — ожидание ' + delay + 'ms, попытка ' + (attempt + 1));
+      await sleep(delay);
+      return getWalletData(address, attempt + 1);
+    }
+    throw e;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -234,6 +255,7 @@ async function cmdBalances(chatId) {
   const lines = [];
 
   for (const w of list) {
+    if (list.indexOf(w) > 0) await sleep(1200); // пауза между кошельками
     try {
       const d = await getWalletData(w.address);
       totalTrx  += d.trx;
