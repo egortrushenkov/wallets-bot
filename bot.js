@@ -134,8 +134,9 @@ const MAIN_KB = {
   reply_markup: {
     keyboard: [
       ['➕ Добавить кошелёк', '📋 Мои кошельки'],
-      ['💰 Балансы',          '✏️ Переименовать'],
-      ['❌ Удалить кошелёк',  'ℹ️ Помощь'],
+      ['💰 Балансы',          '📥 Выгрузить CSV'],
+      ['✏️ Переименовать',    '❌ Удалить кошелёк'],
+      ['ℹ️ Помощь'],
     ],
     resize_keyboard: true,
   },
@@ -188,6 +189,7 @@ function cmdHelp(chatId) {
     '➕ *Добавить кошелёк* — добавить новый TRX-адрес\n' +
     '📋 *Мои кошельки* — список всех добавленных кошельков\n' +
     '💰 *Балансы* — показать балансы всех кошельков\n' +
+    '📥 *Выгрузить CSV* — скачать таблицу с балансами\n' +
     '✏️ *Переименовать* — изменить название кошелька\n' +
     '❌ *Удалить кошелёк* — удалить кошелёк из списка\n\n' +
     '_Данные сохраняются в wallets.json на сервере._',
@@ -206,9 +208,11 @@ bot.on('message', async (msg) => {
   if (text === '➕ Добавить кошелёк') { return startAdd(chatId); }
   if (text === '📋 Мои кошельки')     { return cmdList(chatId); }
   if (text === '💰 Балансы')          { return cmdBalances(chatId); }
+  if (text === '📥 Выгрузить CSV')    { return cmdCsv(chatId); }
   if (text === '✏️ Переименовать')    { return startRename(chatId); }
   if (text === '❌ Удалить кошелёк')  { return startDelete(chatId); }
   if (text === 'ℹ️ Помощь')           { return cmdHelp(chatId); }
+  if (text === '/csv')                { return cmdCsv(chatId); }
   if (text === '🚫 Отмена')           { clearState(chatId); return send(chatId, '✅ Отменено.', MAIN_KB); }
 
   // Обработка шагов диалога
@@ -283,6 +287,63 @@ async function cmdBalances(chatId) {
 
   bot.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
   send(chatId, '💰 *Балансы кошельков:*\n\n' + lines.join('\n\n') + summary, MAIN_KB);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Выгрузка CSV
+// ─────────────────────────────────────────────────────────────────────────────
+async function cmdCsv(chatId) {
+  const list = getWallets(chatId);
+  if (list.length === 0) {
+    return send(chatId, '📭 Нет кошельков для выгрузки.', MAIN_KB);
+  }
+
+  const loadingMsg = await send(chatId, '⏳ Собираю данные для CSV...', MAIN_KB);
+
+  const price = await getTrxPrice();
+  const now   = new Date().toISOString().replace('T', ' ').slice(0, 19);
+  const rows  = [['Название', 'Адрес', 'TRX', 'USDT', 'TRX (USD)', 'USDT+TRX (USD)', 'Прочих токенов', 'Дата']];
+
+  for (const w of list) {
+    if (list.indexOf(w) > 0) await sleep(1200);
+    try {
+      const d      = await getWalletData(w.address);
+      const trxUsd = price ? (d.trx * price).toFixed(2) : '';
+      const total  = price ? (d.trx * price + d.usdt).toFixed(2) : '';
+      rows.push([
+        w.label || '',
+        w.address,
+        d.trx.toFixed(6),
+        d.usdt.toFixed(2),
+        trxUsd,
+        total,
+        String(d.tokens),
+        now,
+      ]);
+    } catch (e) {
+      rows.push([w.label || '', w.address, 'ERROR', 'ERROR', '', '', '', now]);
+    }
+  }
+
+  // Формируем CSV строку (разделитель ; для совместимости с Excel)
+  const csvContent = rows.map(r =>
+    r.map(cell => '"' + String(cell).replace(/"/g, '""') + '"').join(';')
+  ).join('\n');
+
+  // Сохраняем во временный файл
+  const tmpFile = path.join(__dirname, 'csv_' + chatId + '_' + Date.now() + '.csv');
+  // BOM для корректного отображения кириллицы в Excel
+  fs.writeFileSync(tmpFile, '\uFEFF' + csvContent, 'utf8');
+
+  bot.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
+
+  try {
+    await bot.sendDocument(chatId, tmpFile, {
+      caption: '📥 Балансы кошельков на ' + now + (price ? ' (курс TRX: $' + price.toFixed(4) + ')' : ''),
+    });
+  } finally {
+    fs.unlink(tmpFile, () => {}); // удаляем временный файл
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
